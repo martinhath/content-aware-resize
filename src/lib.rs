@@ -34,7 +34,7 @@ impl Image {
 }
 
 fn save_to_file(image: &GradientBuffer, file_path: &'static str) {
-    let u8_container = image.pixels().map(|a| (a[0] / 2) as u8).collect::<Vec<_>>();
+    let u8_container = image.pixels().map(|a| (a[0] / 128) as u8).collect::<Vec<_>>();
     let image: image::ImageBuffer<image::Luma<u8>, Vec<u8>> = image::ImageBuffer::from_raw(image.width(), image.height(), u8_container).unwrap();
     image.save(&path::Path::new(file_path)).unwrap();
 }
@@ -57,14 +57,14 @@ fn decompose(image: &image::DynamicImage) ->
     (red, green, blue)
 }
 
-struct DPTable<T> {
+struct DPTable {
     width: usize,
     height: usize,
-    table: Vec<T>,
+    table: Vec<u16>,
 }
 
 // TODO: horizontal
-impl DPTable<u16> {
+impl DPTable {
     fn get(&self, w: usize, h: usize) -> u16 {
         let i = self.width * h + w;
         self.table[i]
@@ -73,6 +73,21 @@ impl DPTable<u16> {
     fn set(&mut self, w: usize, h: usize, v: u16) {
         let i = self.width * h + w;
         self.table[i] = v;
+    }
+
+    fn to_gradient_buffer(self) -> GradientBuffer {
+        GradientBuffer::from_raw(self.width as u32, self.height as u32, self.table).unwrap()
+    }
+
+    fn start_index(&self) -> usize {
+        self.table.iter()
+            .take(self.width)
+            .enumerate()
+            .map(|(i, n)| (n, i))
+            .min()
+            .map(|(_, i)| i)
+            .unwrap_or(0)
+
     }
 
     fn from_gradient_buffer(gradient: &GradientBuffer) -> Self {
@@ -85,30 +100,28 @@ impl DPTable<u16> {
             table: vec![0; w * h],
         };
         // return gradient[h][w]
-        fn get(w: usize, h: usize, g: &GradientBuffer) -> u16 {
-            g.get_pixel(w as u32, h as u32)[0]
-        }
+        let get = |w, h| gradient.get_pixel(w as u32, h as u32)[0];
 
         // Initialize bottom row
         for i in 0..w {
-            let px = get(i, h - 1, &gradient);
+            let px = get(i, h - 1);
             table.set(i, h - 1, px)
         }
         // For each cell in row j, select the smaller of the cells in the 
         // row above. Special case the end rows
         use std::cmp::min;
         for row in (0..h - 1).rev() {
-            let left = get(0, row, &gradient) + min(table.get(0, row - 1), table.get(1, row - 1));
-            table.set(0, row, left);
-            let right = get(0, row, &gradient) + min(table.get(w - 1, row - 1), table.get(w - 2, row - 1));
-            table.set(w - 1, row, right);
-            for col in 1..w - 2 {
-                let l = get(col - 1, row - 1, &gradient);
-                let m = get(col    , row - 1, &gradient);
-                let r = get(col + 1, row - 1, &gradient);
-                let a = table.get(col, row);
-                table.set(col, row, a + min(min(l, m), r));
+            for col in 1..w - 1 {
+                let l = table.get(col - 1, row + 1);
+                let m = table.get(col    , row + 1);
+                let r = table.get(col + 1, row + 1);
+                table.set(col, row, get(col, row) + min(min(l, m), r));
             }
+            // special case far left and far right:
+            let left = get(0, row) + min(table.get(0, row + 1), table.get(1, row + 1));
+            table.set(0, row, left);
+            let right = get(0, row) + min(table.get(w - 1, row + 1), table.get(w - 2, row + 1));
+            table.set(w - 1, row, right);
         }
         table
     }
@@ -124,7 +137,9 @@ pub fn lib() {
     let image = Image::load_image(path::Path::new("sample-image.jpg"));
     let grad = image.gradient_magnitude();
     let table = DPTable::from_gradient_buffer(&grad);
-    save_to_file(&grad, "gradient.jpeg");
+    println!("{}", table.start_index());
+    let grad = table.to_gradient_buffer();
+    save_to_file(&grad, "gradient_buffer.jpeg");
 }
 
 
