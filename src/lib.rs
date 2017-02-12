@@ -4,6 +4,7 @@ extern crate imageproc;
 use image::{GenericImage, Pixel};
 
 use std::path;
+use std::cmp::min;
 
 struct Image {
     inner: image::DynamicImage,
@@ -29,7 +30,36 @@ impl Image {
         for (r, g, b) in izip!(r_grad.pixels(), g_grad.pixels(), b_grad.pixels()) {
             container.push(r[0] + g[0] + b[0]);
         }
+
+        // Mark edges as high gradients
+        {
+            // top
+            for i in 0..w { container[i as usize] = 100; }
+            // bottom
+            for i in 0..w { container[((h - 1) * w + i) as usize] = 100; }
+            // left
+            for i in 0..h { container[(w * i) as usize] = 100; }
+            // right
+            for i in 0..h { container[(w * i + w - 1) as usize] = 100; }
+        }
         image::ImageBuffer::from_raw(w, h, container).unwrap()
+    }
+
+    fn remove_path(&mut self, path: Path) {
+        let image_buffer = self.inner.to_rgb();
+        let (w, h) = image_buffer.dimensions();
+        let container = image_buffer.into_raw();
+        let mut new_pixels = vec![];
+
+        let mut path = path.indices.iter();
+        let mut i = 0;
+        while let Some(&index) = path.next() {
+            new_pixels.extend(&container[i..index * 3]);
+            i = (index + 1) * 3;
+        }
+        new_pixels.extend(&container[i..]);
+        let ib = image::ImageBuffer::from_raw(w - 1, h, new_pixels).expect("Failed to create ImageBuffer");
+        self.inner = image::DynamicImage::ImageRgb8(ib);
     }
 }
 
@@ -79,15 +109,14 @@ impl DPTable {
         GradientBuffer::from_raw(self.width as u32, self.height as u32, self.table).unwrap()
     }
 
-    fn start_index(&self) -> usize {
+    fn path_start_index(&self) -> usize {
         self.table.iter()
             .take(self.width)
             .enumerate()
             .map(|(i, n)| (n, i))
             .min()
             .map(|(_, i)| i)
-            .unwrap_or(0)
-
+            .unwrap()
     }
 
     fn from_gradient_buffer(gradient: &GradientBuffer) -> Self {
@@ -109,7 +138,6 @@ impl DPTable {
         }
         // For each cell in row j, select the smaller of the cells in the 
         // row above. Special case the end rows
-        use std::cmp::min;
         for row in (0..h - 1).rev() {
             for col in 1..w - 1 {
                 let l = table.get(col - 1, row + 1);
@@ -127,19 +155,62 @@ impl DPTable {
     }
 }
 
-/*fn shortest_path_vertical(gradient: &GradientBuffer) -> DPTable<u16> {
-    let (w, h) = gradient.dimensions();
-    let mut dp_table = DPTable::new(w as usize, h as usize);
-    dp_table
-}*/
+struct Path {
+    indices: Vec<usize>
+}
+
+impl Path {
+    fn from_dp_table(table: &DPTable) -> Self {
+        let mut v = Vec::with_capacity(table.height);
+        let mut col: usize = table.path_start_index();
+        v.push(col);
+        for row in 1..table.height {
+            if col == 0 {
+                let m = table.get(col, row);
+                let r = table.get(col + 1, row);
+                if m > r {
+                    col += 1;
+                }
+            } else if col == table.width - 1 {
+                let l = table.get(col - 1, row);
+                let m = table.get(col, row);
+                if l < m {
+                    col -= 1;
+                }
+            } else {
+                let l = table.get(col - 1, row);
+                let m = table.get(col, row);
+                let r = table.get(col + 1, row);
+                let minimum = min(min(l, m), r);
+                if minimum == l {
+                    col -= 1;
+                } else if minimum == r {
+                    col += 1;
+                }
+            }
+            v.push(col);
+        }
+        v.iter_mut().enumerate().map(|(i, n)| {
+            *n += i * table.width;
+        }).last();
+
+        Path {
+            indices: v
+        }
+    }
+}
 
 pub fn lib() {
-    let image = Image::load_image(path::Path::new("sample-image.jpg"));
-    let grad = image.gradient_magnitude();
-    let table = DPTable::from_gradient_buffer(&grad);
-    println!("{}", table.start_index());
-    let grad = table.to_gradient_buffer();
-    save_to_file(&grad, "gradient_buffer.jpeg");
+    let mut image = Image::load_image(path::Path::new("sample-image.jpg"));
+    for _ in 0..200 {
+        let grad = image.gradient_magnitude();
+        let table = DPTable::from_gradient_buffer(&grad);
+        let path = Path::from_dp_table(&table);
+        image.remove_path(path);
+    }
+    use std::fs::File;
+    let mut file = File::create(path::Path::new("resized.jpeg")).expect("Failed to create file");
+    image.inner.save(&mut file, image::ImageFormat::JPEG).unwrap();
 }
 
 
