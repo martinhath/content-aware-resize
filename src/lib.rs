@@ -6,7 +6,11 @@ use image::{GenericImage, Pixel};
 use std::path;
 use std::cmp::min;
 
-struct Image {
+pub enum Dimensions {
+    Relative(isize, isize),
+}
+
+pub struct Image {
     inner: image::DynamicImage,
 }
 
@@ -17,6 +21,33 @@ impl Image {
         Image {
             inner: image::open(path).unwrap()
         }
+    }
+
+    fn size_difference(&self, dims: Dimensions) -> (isize, isize) {
+        let (w, h) = self.inner.dimensions();
+        match dims {
+            Dimensions::Relative(x, y) => {
+                (w as isize + x, h as isize + x)
+            }
+        }
+    }
+
+    pub fn resize_to(&mut self, dimensions: Dimensions) {
+        let (mut xs, mut _ys) = self.size_difference(dimensions);
+        // Only horizontal downsize for now 
+        if xs < 0 { panic!("Only downsizing is supported.") }
+        if _ys != 0 { panic!("Only horizontal resizing is supported.") }
+        while xs > 0 {
+            let grad = self.gradient_magnitude();
+            let table = DPTable::from_gradient_buffer(&grad);
+            let path = Path::from_dp_table(&table);
+            self.remove_path(path);
+            xs -= 1;
+        }
+    }
+
+    pub fn get_image_data(&self) -> &[u8] {
+        self.inner.as_rgb8().unwrap()
     }
 
     fn gradient_magnitude(&self) -> GradientBuffer {
@@ -156,13 +187,15 @@ impl DPTable {
 }
 
 struct Path {
-    indices: Vec<usize>
+    indices: Vec<usize>,
+    score: u16,
 }
 
 impl Path {
     fn from_dp_table(table: &DPTable) -> Self {
         let mut v = Vec::with_capacity(table.height);
         let mut col: usize = table.path_start_index();
+        let score = table.get(col, 0);
         v.push(col);
         for row in 1..table.height {
             if col == 0 {
@@ -195,7 +228,8 @@ impl Path {
         }).last();
 
         Path {
-            indices: v
+            indices: v,
+            score: score,
         }
     }
 }
@@ -211,9 +245,4 @@ pub fn lib() {
     use std::fs::File;
     let mut file = File::create(path::Path::new("resized.jpeg")).expect("Failed to create file");
     image.inner.save(&mut file, image::ImageFormat::JPEG).unwrap();
-}
-
-
-#[test]
-fn it_works() {
 }
