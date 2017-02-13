@@ -24,10 +24,9 @@ impl Image {
     }
 
     fn size_difference(&self, dims: Dimensions) -> (isize, isize) {
-        let (w, h) = self.inner.dimensions();
         match dims {
             Dimensions::Relative(x, y) => {
-                (w as isize + x, h as isize + x)
+                (x, y)
             }
         }
     }
@@ -35,19 +34,23 @@ impl Image {
     pub fn resize_to(&mut self, dimensions: Dimensions) {
         let (mut xs, mut _ys) = self.size_difference(dimensions);
         // Only horizontal downsize for now 
-        if xs < 0 { panic!("Only downsizing is supported.") }
+        if xs > 0 { panic!("Only downsizing is supported.") }
         if _ys != 0 { panic!("Only horizontal resizing is supported.") }
-        while xs > 0 {
+        while xs < 0 {
             let grad = self.gradient_magnitude();
             let table = DPTable::from_gradient_buffer(&grad);
             let path = Path::from_dp_table(&table);
             self.remove_path(path);
-            xs -= 1;
+            xs += 1;
         }
     }
 
     pub fn get_image_data(&self) -> &[u8] {
         self.inner.as_rgb8().unwrap()
+    }
+
+    pub fn dimmensions(&self) -> (u32, u32) {
+        self.inner.dimensions()
     }
 
     fn gradient_magnitude(&self) -> GradientBuffer {
@@ -221,11 +224,8 @@ impl Path {
                     col += 1;
                 }
             }
-            v.push(col);
+            v.push(col + row * table.width);
         }
-        v.iter_mut().enumerate().map(|(i, n)| {
-            *n += i * table.width;
-        }).last();
 
         Path {
             indices: v,
